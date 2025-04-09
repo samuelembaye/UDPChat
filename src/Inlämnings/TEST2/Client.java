@@ -1,29 +1,30 @@
-package Inlämnings.UDP;
+package Inlämnings.TEST2;
+
+import Inlämnings.UDP.UDPChat;
 
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
-import java.io.IOException;
+import java.io.*;
 import java.net.DatagramPacket;
-import java.net.InetAddress;
-import java.net.MulticastSocket;
+import java.net.Socket;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class UDPChat extends JFrame {
-
-    private static final String MULTICAST_ADDRESS = "230.0.0.1"; // Correct multicast address
-//    private static final String MULTICAST_ADDRESS = "224.0.0.1"; // Scope: local machine only
-    private static final int PORT = 5000;
+public class Client extends JFrame {
+    private final String SERVER_ADDRESS = "localhost";
+    private final int PORT = 12346;
 
     private String username;
-    private MulticastSocket socket;
-    private InetAddress groupAddress;
+    private Socket socket;
+    private ObjectOutputStream out;
+    private ObjectInputStream in;
     private volatile boolean running = true;
 
-//    JFRAME
+
+    //    JFRAME
     private JTextArea chatArea;
     private JTextField messageField;
     private JList<String> userList;
@@ -31,18 +32,15 @@ public class UDPChat extends JFrame {
 
     // User tracking
     private Map<String, Long> activeUsers = new ConcurrentHashMap<>();
-    private int sequenceNumber = 0;
 
-    public UDPChat(String username) {
+    public Client(String username) throws IOException, ClassNotFoundException {
         this.username = username;
-        new Thread(this::GUI_Init).start();
-//        GUI_Init();
+        GUI_Init();
         setupNetwork();
-
     }
 
     private void GUI_Init() {
-//        System.out.println(username);
+        System.out.println(username);
         setTitle("SAMI Chat - " + username);
         setSize(800, 600);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -56,10 +54,8 @@ public class UDPChat extends JFrame {
         buttonFont = new Font("Segoe UI", Font.BOLD, 14); // Modern Windows font
         koplanerButton.setFont(buttonFont);koplanerButton.setFocusPainted(false); // Removes the dotted border when focused
         koplanerButton.addActionListener(e ->
-                                        {sendLeaveMessage();
-                                        running = false;;
-                                        dispose();
-                                        });
+        {sendLeaveMessage();
+            running = false;});
         JPanel topPanel = new JPanel(new BorderLayout());
         topPanel.add(koplanerButton, BorderLayout.EAST);
         fullPanel.add(topPanel, BorderLayout.NORTH);
@@ -90,7 +86,7 @@ public class UDPChat extends JFrame {
         fullPanel.add(messagepanel, BorderLayout.SOUTH);
 
         add(fullPanel);
-       // pack();
+        // pack();
         setLocationRelativeTo(null);
         setVisible(true);
 
@@ -100,74 +96,48 @@ public class UDPChat extends JFrame {
             public void windowClosing(WindowEvent e) {
                 sendLeaveMessage();
                 running = false;
-                if (socket != null) socket.close();
+                if (socket != null) {
+                    try {
+                        socket.close();
+                    } catch (IOException ex) {
+                        throw new RuntimeException(ex);
+                    }
+                }
             }
         });
 
     }
 
-    private void setupNetwork() {
-        try {
-            groupAddress = InetAddress.getByName(MULTICAST_ADDRESS);
-            socket = new MulticastSocket(PORT);
-//            socket.setLoopbackMode(false); // Allow receiving your own packets
-//            socket.setInterface(InetAddress.getByName("0.0.0.0")); // Bind to all interfaces
-            socket.joinGroup(groupAddress);
+    private void setupNetwork() throws IOException, ClassNotFoundException {
+        try{ socket= new Socket(SERVER_ADDRESS, PORT);
+            out = new ObjectOutputStream(socket.getOutputStream());
+            in = new ObjectInputStream(socket.getInputStream());
 
-            // Send join message
             sendJoinMessage();
-            // Start receiver thread
+            // Start message receiver thread
             new Thread(this::receiveMessages).start();
-        } catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "Error setting up network: " + e.getMessage(),
-                    "Network Error", JOptionPane.ERROR_MESSAGE);
+
+        }catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Error connecting to server: " + e.getMessage(),
+                    "Connection Error", JOptionPane.ERROR_MESSAGE);
             System.exit(1);
         }
     }
-
-    private void getMessagetosend() {
-        String text = messageField.getText().trim();
-        if (!text.isEmpty()) {
-            sendMessage("MESSAGE", text);
-            messageField.setText("");
-        }
-    }
-
-    private void sendJoinMessage() {
-        sendMessage("JOIN", "");
-    }
-
-    private void sendLeaveMessage() {
-        sendMessage("LEAVE", "");
-    }
-
-    private void sendackMessage() {
-        sendMessage("ACK", "");
-    }
-
-    private void sendMessage(String type, String text) {
-        try {
-            String message = String.format("{\"type\":\"%s\",\"seq\":%d,\"sender\":\"%s\",\"text\":\"%s\"}",
-                    type, sequenceNumber++, username, text);
-            byte[] buffer = message.getBytes();
-            DatagramPacket packet = new DatagramPacket(buffer, buffer.length, groupAddress, PORT);
-            socket.send(packet);
-        } catch (IOException e) {
-            chatArea.append("Error sending message: " + e.getMessage() + "\n");
-        }
-    }
-
     private void receiveMessages() {
-        byte[] buffer = new byte[1024];
-        while (running) {
-            try {
-                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-                socket.receive(packet);
-                String received = new String(packet.getData(), 0, packet.getLength());
-                processMessage(received);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+        try {
+            Object message;
+            while (running && (message = in.readObject()) != null) {
+                String receivedMessage = (String) message;
+//                SwingUtilities.invokeLater(() -> chatArea.append(receivedMessage + "\n"));
+                processMessage(receivedMessage);
             }
+        } catch (IOException e) {
+            if (running) {
+                SwingUtilities.invokeLater(() ->
+                        chatArea.append("Connection lost: " + e.getMessage() + "\n"));
+            }
+        } catch (ClassNotFoundException e) {
+            throw new RuntimeException(e);
         }
     }
 
@@ -183,13 +153,11 @@ public class UDPChat extends JFrame {
 
             // Update GUI
             SwingUtilities.invokeLater(() -> {
+                updateUserList();
 
                 switch (type) {
-                    case "ACK":
-                        break;
                     case "JOIN":
                         chatArea.append(sender + " has joined the chat\n");
-                        sendackMessage();
                         break;
                     case "LEAVE":
                         chatArea.append(sender + " has left the chat\n");
@@ -200,14 +168,11 @@ public class UDPChat extends JFrame {
                         break;
                     // HEARTBEAT just updates last active time
                 }
-
-                updateUserList();
             });
         } catch (Exception e) {
             chatArea.append("Error processing message: " + e.getMessage() + "\n");
         }
     }
-
     private String extractValue(String jsonMessage, String key) {
         String pattern = "\"" + key + "\":\"(.*?)\"";
         java.util.regex.Pattern r = java.util.regex.Pattern.compile(pattern);
@@ -232,12 +197,42 @@ public class UDPChat extends JFrame {
                 .forEach(userListModel::addElement);
     }
 
-    public static void main(String[] args) {
+
+    private void getMessagetosend() {
+        String text = messageField.getText().trim();
+        if (!text.isEmpty()) {
+            sendMessage("MESSAGE", text);
+            messageField.setText("");
+        }
+    }
+
+    private void sendMessage(String type, String text) {
+        try {
+            String message = String.format("{\"type\":\"%s\",\"sender\":\"%s\",\"text\":\"%s\"}",
+                    type, username, text);
+
+            out.writeObject(message);
+            out.flush();
+
+        } catch (IOException e) {
+            chatArea.append("Error sending message: " + e.getMessage() + "\n");
+        }
+    }
+
+    private void sendJoinMessage() {
+        sendMessage("JOIN", "");
+    }
+
+    private void sendLeaveMessage() {
+        sendMessage("LEAVE", "");
+    }
+
+    public static void main(String[] args) throws IOException, ClassNotFoundException {
         String username = JOptionPane.showInputDialog("Enter your username:");
-//        System.out.println(username);
+        System.out.println(username);
         if (username == null || username.trim().isEmpty()) {
             username = "User" + new Random().nextInt(1000);
         }
-        UDPChat chat = new UDPChat(username);
+       Client chat = new Client(username);
     }
 }

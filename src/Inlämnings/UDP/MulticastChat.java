@@ -56,7 +56,13 @@ public class MulticastChat extends JFrame {
         userList = new JList<>(userListModel);
         JScrollPane userScroll = new JScrollPane(userList);
         userScroll.setPreferredSize(new Dimension(150, 0));
-        mainPanel.add(userScroll, BorderLayout.EAST);
+
+        JPanel eastpanel = new JPanel(new BorderLayout());
+        eastpanel.setBorder(BorderFactory.createTitledBorder("Active"));
+
+        eastpanel.add(userScroll, BorderLayout.CENTER);
+
+        mainPanel.add(eastpanel, BorderLayout.EAST);
 
         // Input panel
         JPanel inputPanel = new JPanel(new BorderLayout());
