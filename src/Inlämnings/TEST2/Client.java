@@ -1,7 +1,6 @@
 package Inlämnings.TEST2;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.core.JsonProcessingException;
 
 import javax.swing.*;
 import java.awt.*;
@@ -9,7 +8,6 @@ import java.awt.event.*;
 import java.io.*;
 import java.net.Socket;
 import java.util.Arrays;
-import java.util.Collections;
 
 public class Client extends JFrame {
     // Constants and variables
@@ -28,7 +26,7 @@ public class Client extends JFrame {
     private JList<String> userList;
     private DefaultListModel<String> userListModel = new DefaultListModel<>();
     private JButton sendButton;
-    private JButton disconnectButton;
+    private JButton KoplanerBtton;
 
     public Client(String username) {
         this.username = username;
@@ -47,11 +45,11 @@ public class Client extends JFrame {
 
         // Top panel with disconnect button
         JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        disconnectButton = new JButton("Disconnect");
-        disconnectButton.setBackground(new Color(200, 50, 50));
-        disconnectButton.setForeground(Color.WHITE);
-        disconnectButton.addActionListener(e -> disconnect());
-        topPanel.add(disconnectButton);
+        KoplanerBtton = new JButton("Koplaner");
+        KoplanerBtton.setBackground(new Color(200, 50, 50));
+        KoplanerBtton.setForeground(Color.WHITE);
+        KoplanerBtton.addActionListener(e -> Koplaner());
+        topPanel.add(KoplanerBtton);
         mainPanel.add(topPanel, BorderLayout.NORTH);
 
         // Center panel with chat area and user list
@@ -71,6 +69,7 @@ public class Client extends JFrame {
         userList = new JList<>(userListModel);
         userList.setFont(new Font("SansSerif", Font.PLAIN, 12));
         userPanel.add(new JScrollPane(userList), BorderLayout.CENTER);
+        userList.setBackground(new Color(197, 239, 214));
         centerPanel.add(userPanel, BorderLayout.EAST);
 
         mainPanel.add(centerPanel, BorderLayout.CENTER);
@@ -96,7 +95,7 @@ public class Client extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                disconnect();
+                Koplaner();
             }
         });
 
@@ -124,7 +123,7 @@ public class Client extends JFrame {
                 String jsonMessage = (String) in.readObject();
                 ChatMessage message = mapper.readValue(jsonMessage, ChatMessage.class);
 
-                SwingUtilities.invokeLater(() -> {
+                SwingUtilities.invokeLater(() -> {  // code runs on the Event Dispatch Thread (EDT)
                     switch (message.getType()) {
                         case "ACK":
                             // Full user list update from server
@@ -141,10 +140,8 @@ public class Client extends JFrame {
                         case "LEAVE":
                             userListModel.removeElement(message.getSender());
                             chatArea.append(message.getSender() + " has left the chat\n");
-                            // User list will be updated by next ACK
                             break;
                         case "MESSAGE":
-                            // Show all messages including your own
                             chatArea.append(message.getSender() + ": " + message.getText() + "\n");
                             break;
                     }
@@ -158,7 +155,7 @@ public class Client extends JFrame {
                         chatArea.append("Connection error: " + e.getMessage() + "\n"));
             }
         } finally {
-            disconnect();
+            Koplaner();
         }
     }
     // New helper method to sort the user list
@@ -203,7 +200,7 @@ public class Client extends JFrame {
         }
     }
 
-    private void disconnect() {
+    private void Koplaner() {
         running = false;
         try {
             sendServerMessage("LEAVE", "");
