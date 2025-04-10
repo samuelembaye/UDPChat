@@ -1,238 +1,226 @@
 package Inlämnings.TEST2;
 
-import Inlämnings.UDP.UDPChat;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
 
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
+import java.awt.event.*;
 import java.io.*;
-import java.net.DatagramPacket;
 import java.net.Socket;
-import java.util.Map;
-import java.util.Random;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Arrays;
+import java.util.Collections;
 
 public class Client extends JFrame {
+    // Constants and variables
     private final String SERVER_ADDRESS = "localhost";
     private final int PORT = 12346;
-
+    private final ObjectMapper mapper = new ObjectMapper();
     private String username;
     private Socket socket;
     private ObjectOutputStream out;
     private ObjectInputStream in;
     private volatile boolean running = true;
 
-
-    //    JFRAME
+    // GUI Components
     private JTextArea chatArea;
     private JTextField messageField;
     private JList<String> userList;
-    private DefaultListModel<String> userListModel;
+    private DefaultListModel<String> userListModel = new DefaultListModel<>();
+    private JButton sendButton;
+    private JButton disconnectButton;
 
-    // User tracking
-    private Map<String, Long> activeUsers = new ConcurrentHashMap<>();
-
-    public Client(String username) throws IOException, ClassNotFoundException {
+    public Client(String username) {
         this.username = username;
-        GUI_Init();
-        setupNetwork();
+        initializeGUI();
+        connectToServer();
     }
 
-    private void GUI_Init() {
-        System.out.println(username);
-        setTitle("SAMI Chat - " + username);
+    private void initializeGUI() {
+        setTitle("Chat Client - " + username);
         setSize(800, 600);
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
 
-        JPanel fullPanel = new JPanel(new BorderLayout());
+        // Main panel with BorderLayout
+        JPanel mainPanel = new JPanel(new BorderLayout());
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        JButton koplanerButton = new JButton("Koplaner");
-        koplanerButton.setPreferredSize(new Dimension(120, 40));
-        koplanerButton.setBackground(new Color(129, 3, 28)); // Softer red
-        koplanerButton.setForeground(Color.WHITE);Font buttonFont;
-        buttonFont = new Font("Segoe UI", Font.BOLD, 14); // Modern Windows font
-        koplanerButton.setFont(buttonFont);koplanerButton.setFocusPainted(false); // Removes the dotted border when focused
-        koplanerButton.addActionListener(e ->
-        {sendLeaveMessage();
-            running = false;});
-        JPanel topPanel = new JPanel(new BorderLayout());
-        topPanel.add(koplanerButton, BorderLayout.EAST);
-        fullPanel.add(topPanel, BorderLayout.NORTH);
+        // Top panel with disconnect button
+        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        disconnectButton = new JButton("Disconnect");
+        disconnectButton.setBackground(new Color(200, 50, 50));
+        disconnectButton.setForeground(Color.WHITE);
+        disconnectButton.addActionListener(e -> disconnect());
+        topPanel.add(disconnectButton);
+        mainPanel.add(topPanel, BorderLayout.NORTH);
 
+        // Center panel with chat area and user list
+        JPanel centerPanel = new JPanel(new BorderLayout());
+
+        // Chat area
         chatArea = new JTextArea();
-        JScrollPane chatScroll = new JScrollPane(chatArea);
         chatArea.setEditable(false);
-        fullPanel.add(chatScroll, BorderLayout.CENTER);
+        chatArea.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        JScrollPane chatScroll = new JScrollPane(chatArea);
+        centerPanel.add(chatScroll, BorderLayout.CENTER);
 
         // User list
-        userListModel = new DefaultListModel<>();
+        JPanel userPanel = new JPanel(new BorderLayout());
+        userPanel.setBorder(BorderFactory.createTitledBorder("Online Users"));
+        userPanel.setPreferredSize(new Dimension(150, 0));
         userList = new JList<>(userListModel);
-        JScrollPane userScroll = new JScrollPane(userList);
-        userScroll.setPreferredSize(new Dimension(150, 0));
-        JPanel eastpanel = new JPanel(new BorderLayout());
-        eastpanel.setBorder(BorderFactory.createTitledBorder("Active"));
-        eastpanel.add(userScroll, BorderLayout.CENTER);
-        fullPanel.add(eastpanel, BorderLayout.EAST);
+        userList.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        userPanel.add(new JScrollPane(userList), BorderLayout.CENTER);
+        centerPanel.add(userPanel, BorderLayout.EAST);
 
-        JPanel messagepanel = new JPanel(new BorderLayout());
+        mainPanel.add(centerPanel, BorderLayout.CENTER);
+
+        // Bottom panel with message input
+        JPanel bottomPanel = new JPanel(new BorderLayout());
+        bottomPanel.setBorder(BorderFactory.createEmptyBorder(5, 0, 0, 0));
+
         messageField = new JTextField();
-        messageField.addActionListener(e -> getMessagetosend());
-        messagepanel.add(messageField, BorderLayout.CENTER);
+        messageField.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        messageField.addActionListener(e -> sendMessage());
 
-        JButton chatButton = new JButton("SKICKA");
-        chatButton.addActionListener(e -> getMessagetosend());
-        messagepanel.add(chatButton, BorderLayout.EAST);
-        fullPanel.add(messagepanel, BorderLayout.SOUTH);
+        sendButton = new JButton("Send");
+        sendButton.setBackground(new Color(70, 130, 180));
+        sendButton.setForeground(Color.WHITE);
+        sendButton.addActionListener(e -> sendMessage());
 
-        add(fullPanel);
-        // pack();
-        setLocationRelativeTo(null);
-        setVisible(true);
+        bottomPanel.add(messageField, BorderLayout.CENTER);
+        bottomPanel.add(sendButton, BorderLayout.EAST);
+        mainPanel.add(bottomPanel, BorderLayout.SOUTH);
 
-        // Add shutdown hook
+        // Window listener for proper cleanup
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                sendLeaveMessage();
-                running = false;
-                if (socket != null) {
-                    try {
-                        socket.close();
-                    } catch (IOException ex) {
-                        throw new RuntimeException(ex);
-                    }
-                }
+                disconnect();
             }
         });
 
+        setContentPane(mainPanel);
+        setLocationRelativeTo(null);
+        setVisible(true);
     }
 
-    private void setupNetwork() throws IOException, ClassNotFoundException {
-        try{ socket= new Socket(SERVER_ADDRESS, PORT);
+    private void connectToServer() {
+        try {
+            socket = new Socket(SERVER_ADDRESS, PORT);
             out = new ObjectOutputStream(socket.getOutputStream());
             in = new ObjectInputStream(socket.getInputStream());
-
-            sendJoinMessage();
-            // Start message receiver thread
+            sendServerMessage("JOIN", "");
             new Thread(this::receiveMessages).start();
-
-        }catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "Error connecting to server: " + e.getMessage(),
-                    "Connection Error", JOptionPane.ERROR_MESSAGE);
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(this, "Connection failed: " + e.getMessage());
             System.exit(1);
         }
     }
+
     private void receiveMessages() {
         try {
-            Object message;
-            while (running && (message = in.readObject()) != null) {
-                String receivedMessage = (String) message;
-//                SwingUtilities.invokeLater(() -> chatArea.append(receivedMessage + "\n"));
-                processMessage(receivedMessage);
+            while (running) {
+                String jsonMessage = (String) in.readObject();
+                ChatMessage message = mapper.readValue(jsonMessage, ChatMessage.class);
+
+                SwingUtilities.invokeLater(() -> {
+                    switch (message.getType()) {
+                        case "ACK":
+                            // Full user list update from server
+                            updateUserList(message.getText().split(","));
+                            break;
+                        case "JOIN":
+                            // Add new user immediately to the list
+                            if (!userListModel.contains(message.getSender())) {
+                                userListModel.addElement(message.getSender());
+                                sortUserList();
+                            }
+                            chatArea.append(message.getSender() + " has joined the chat\n");
+                            break;
+                        case "LEAVE":
+                            userListModel.removeElement(message.getSender());
+                            chatArea.append(message.getSender() + " has left the chat\n");
+                            // User list will be updated by next ACK
+                            break;
+                        case "MESSAGE":
+                            // Show all messages including your own
+                            chatArea.append(message.getSender() + ": " + message.getText() + "\n");
+                            break;
+                    }
+                    // Auto-scroll to bottom
+                    chatArea.setCaretPosition(chatArea.getDocument().getLength());
+                });
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
             if (running) {
                 SwingUtilities.invokeLater(() ->
-                        chatArea.append("Connection lost: " + e.getMessage() + "\n"));
+                        chatArea.append("Connection error: " + e.getMessage() + "\n"));
             }
-        } catch (ClassNotFoundException e) {
-            throw new RuntimeException(e);
+        } finally {
+            disconnect();
         }
     }
-
-    private void processMessage(String jsonMessage) {
-        try {
-            // Simple JSON parsing (for simplicity, in real app use a proper JSON library)
-            String type = extractValue(jsonMessage, "type");
-            String sender = extractValue(jsonMessage, "sender");
-            String text = extractValue(jsonMessage, "text");
-
-            // Update user activity
-            activeUsers.put(sender, System.currentTimeMillis());
-
-            // Update GUI
-            SwingUtilities.invokeLater(() -> {
-                updateUserList();
-
-                switch (type) {
-                    case "JOIN":
-                        chatArea.append(sender + " has joined the chat\n");
-                        break;
-                    case "LEAVE":
-                        chatArea.append(sender + " has left the chat\n");
-                        activeUsers.remove(sender);
-                        break;
-                    case "MESSAGE":
-                        chatArea.append(sender + ": " + text + "\n");
-                        break;
-                    // HEARTBEAT just updates last active time
-                }
-            });
-        } catch (Exception e) {
-            chatArea.append("Error processing message: " + e.getMessage() + "\n");
-        }
-    }
-    private String extractValue(String jsonMessage, String key) {
-        String pattern = "\"" + key + "\":\"(.*?)\"";
-        java.util.regex.Pattern r = java.util.regex.Pattern.compile(pattern);
-        java.util.regex.Matcher m = r.matcher(jsonMessage);
-        if (m.find()) {
-            return m.group(1);
-        }
-        pattern = "\"" + key + "\":(\\d+)"; // For numbers
-        r = java.util.regex.Pattern.compile(pattern);
-        m = r.matcher(jsonMessage);
-        if (m.find()) {
-            return m.group(1);
-        }
-        return "";
-
-    }
-
-    private void updateUserList() {
+    // New helper method to sort the user list
+    private void sortUserList() {
+        String[] users = new String[userListModel.size()];
+        userListModel.copyInto(users);
+        Arrays.sort(users);
         userListModel.clear();
-        activeUsers.keySet().stream()
+        for (String user : users) {
+            userListModel.addElement(user);
+        }
+    }
+    private void sendMessage() {
+        String text = messageField.getText().trim();
+        if (!text.isEmpty()) {
+            // Immediately show your own message in the chat area
+            chatArea.append("You: " + text + "\n");
+            chatArea.setCaretPosition(chatArea.getDocument().getLength());
+
+            // Send the message to server
+            sendServerMessage("MESSAGE", text);
+            messageField.setText("");
+        }
+    }
+
+    private void updateUserList(String[] users) {
+        userListModel.clear();
+        Arrays.stream(users)
+                .filter(name -> !name.isEmpty())
                 .sorted()
                 .forEach(userListModel::addElement);
     }
 
 
-    private void getMessagetosend() {
-        String text = messageField.getText().trim();
-        if (!text.isEmpty()) {
-            sendMessage("MESSAGE", text);
-            messageField.setText("");
-        }
-    }
 
-    private void sendMessage(String type, String text) {
+    private void sendServerMessage(String type, String text) {
         try {
-            String message = String.format("{\"type\":\"%s\",\"sender\":\"%s\",\"text\":\"%s\"}",
-                    type, username, text);
-
-            out.writeObject(message);
+            out.writeObject(mapper.writeValueAsString(new ChatMessage(type, username, text)));
             out.flush();
-
         } catch (IOException e) {
-            chatArea.append("Error sending message: " + e.getMessage() + "\n");
+            chatArea.append("Send error: " + e.getMessage() + "\n");
         }
     }
 
-    private void sendJoinMessage() {
-        sendMessage("JOIN", "");
+    private void disconnect() {
+        running = false;
+        try {
+            sendServerMessage("LEAVE", "");
+            if (out != null) out.close();
+            if (in != null) in.close();
+            if (socket != null) socket.close();
+        } catch (IOException e) {
+            System.err.println("Disconnect error: " + e.getMessage());
+        }
+        dispose();
     }
 
-    private void sendLeaveMessage() {
-        sendMessage("LEAVE", "");
-    }
-
-    public static void main(String[] args) throws IOException, ClassNotFoundException {
-        String username = JOptionPane.showInputDialog("Enter your username:");
-        System.out.println(username);
+    public static void main(String[] args) {
+        String username = JOptionPane.showInputDialog("Enter username:");
         if (username == null || username.trim().isEmpty()) {
-            username = "User" + new Random().nextInt(1000);
+            username = "User" + (int)(Math.random() * 1000);
         }
-       Client chat = new Client(username);
+        Client client = new Client(username);
     }
 }

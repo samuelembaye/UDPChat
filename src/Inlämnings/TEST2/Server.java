@@ -21,8 +21,11 @@ public class Server extends Thread {
 
     public Server(Socket clientSocket) {
         this.clientSocket = clientSocket;
+        initializeStreams();
+    }
+
+    private void initializeStreams() {
         try {
-            // Initialize streams in this order to prevent deadlock
             out = new ObjectOutputStream(clientSocket.getOutputStream());
             out.flush();
             in = new ObjectInputStream(clientSocket.getInputStream());
@@ -37,62 +40,92 @@ public class Server extends Thread {
         try {
             while (running) {
                 Object message = in.readObject();
-                if (message == null) break; // Client disconnected
+                if (message == null) break;
                 processMessage((String) message);
             }
-        } catch (ClassNotFoundException e) {
-            System.err.println("Invalid message format: " + e.getMessage());
-        } catch (IOException e) {
-            if (running) { // Only log if we didn't intentionally close
-                System.err.println("Client connection error: " + e.getMessage());
-            }
+        } catch (Exception e) {
+            if (running) System.err.println("Client error: " + e.getMessage());
         } finally {
             closeConnection();
         }
     }
 
-    private void processMessage(String jsonMessage) {
-        try {
-            ChatMessage message = mapper.readValue(jsonMessage, ChatMessage.class);
+    private void processMessage(String jsonMessage) throws IOException {
+        ChatMessage message = mapper.readValue(jsonMessage, ChatMessage.class);
 
-            // Handle JOIN messages first to set username
-            if ("JOIN".equals(message.getType())) {
-                this.username = message.getSender();
-                activeClients.put(username, this);
-                System.out.println(username + " joined the chat");
-            }
-
-            // Broadcast to all clients except sender
-            broadcastMessage(message);
-
-            // Handle LEAVE messages last
-            if ("LEAVE".equals(message.getType())) {
-                activeClients.remove(username);
-                System.out.println(username + " left the chat");
-                running = false; // Stop this thread
-            }
-        } catch (JsonProcessingException e) {
-            System.err.println("Error parsing JSON: " + e.getMessage());
+        switch (message.getType()) {
+            case "JOIN":
+                handleJoin(message);
+                break;
+            case "LEAVE":
+                handleLeave(message);
+                break;
+            case "MESSAGE":
+                broadcastMessage(message);
+                break;
+            case "ACK":
+                break; // No action needed for ACK
         }
     }
+
+    private void handleJoin(ChatMessage message) throws IOException {
+        this.username = message.getSender();
+        activeClients.put(username, this);
+
+        // 1. Send ACK to new client with full user list
+        sendAckWithUserList();
+
+        // 2. Broadcast JOIN to all clients (which will trigger them to add the new user)
+        broadcastMessage(new ChatMessage("JOIN", username, "has joined the chat"));
+
+        // 3. Send updated ACK to all clients with new user list
+        ChatMessage updateAck = new ChatMessage("ACK", "SERVER", String.join(",", activeClients.keySet()));
+        broadcastMessage(updateAck);
+    }
+
+    private void sendAckWithUserList() throws JsonProcessingException,IOException {
+        ChatMessage ack = new ChatMessage("ACK", "SERVER", String.join(",", activeClients.keySet()));
+        out.writeObject(mapper.writeValueAsString(ack));
+        out.flush();
+    }
+
+    private void handleLeave(ChatMessage message) throws JsonProcessingException , IOException {
+        // 1. Broadcast LEAVE message to all clients
+        broadcastMessage(new ChatMessage("LEAVE", username, "has left the chat"));
+
+        // 2. Remove user from active clients
+        activeClients.remove(username);
+
+//        // 3. Send ACK to leaving client (optional)
+//        sendAckMessage();
+//
+//        // 4. Broadcast updated user list to all remaining clients
+//        broadcastUserListUpdate();
+
+        running = false;
+    }
+//    private void sendAckMessage() throws JsonProcessingException,IOException {
+//        ChatMessage ack = new ChatMessage("ACK", "SERVER", "ack");
+//        out.writeObject(mapper.writeValueAsString(ack));
+//        out.flush();
+//    }
+//    private void broadcastUserListUpdate() throws JsonProcessingException {
+//        String userList = String.join(",", activeClients.keySet());
+//        ChatMessage update = new ChatMessage("ACK", "SERVER", userList);
+//        broadcastMessage(update);
+//    }
 
     private void broadcastMessage(ChatMessage message) {
         try {
             String jsonMessage = mapper.writeValueAsString(message);
             for (Server client : activeClients.values()) {
-                if (client != this) { // Don't send back to sender
-                    try {
-                        client.out.writeObject(jsonMessage);
-                        client.out.flush();
-                    } catch (IOException e) {
-                        // Remove disconnected clients
-                        activeClients.remove(client.username);
-                        System.err.println("Removed disconnected client: " + client.username);
-                    }
+                if (client != this) {
+                    client.out.writeObject(jsonMessage);
+                    client.out.flush();
                 }
             }
-        } catch (JsonProcessingException e) {
-            System.err.println("Error creating JSON: " + e.getMessage());
+        } catch (IOException e) {
+            System.err.println("Broadcast error: " + e.getMessage());
         }
     }
 
@@ -101,30 +134,10 @@ public class Server extends Thread {
         try {
             if (out != null) out.close();
             if (in != null) in.close();
-            if (clientSocket != null && !clientSocket.isClosed()) {
-                clientSocket.close();
-            }
+            if (clientSocket != null) clientSocket.close();
         } catch (IOException e) {
-            System.err.println("Error closing resources: " + e.getMessage());
+            System.err.println("Close error: " + e.getMessage());
         }
-
-        if (username != null) {
-            activeClients.remove(username);
-            System.out.println("Cleaned up resources for: " + username);
-        }
-    }
-
-    public static class ChatMessage {
-        private String type;
-        private String sender;
-        private String text;
-
-        // Getters and setters
-        public String getType() { return type; }
-        public void setType(String type) { this.type = type; }
-        public String getSender() { return sender; }
-        public void setSender(String sender) { this.sender = sender; }
-        public String getText() { return text; }
-        public void setText(String text) { this.text = text; }
+        if (username != null) activeClients.remove(username);
     }
 }
